@@ -1,0 +1,49 @@
+# Android Studio / IntelliJ
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Android build files
+.gradle/
+build/
+*/build/
+
+# Local SDK configuration
+local.properties
+
+# Generated Android files
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Kotlin
+.kotlin/
+
+# Keystore / signing files
+*.jks
+*.keystore
+
+# Google Services
+google-services.json
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Android Studio caches
+.navigation/
+.navigation/
+
+# Firebase / Crashlytics generated files
+com_crashlytics_export_strings.xml
+crashlytics.properties
+
+# Release output
+*.apk
+*.aab
