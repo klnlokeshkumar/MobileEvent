@@ -43,5 +43,6 @@
             <meta-data android:name="android.appwidget.provider" android:resource="@xml/reminder_widget_info" />
         </receiver>
         <activity android:name=".ReminderWidgetConfigureActivity" android:exported="true" />
+        <activity android:name=".ReminderEditActivity" android:exported="false" />
     </application>
 </manifest>

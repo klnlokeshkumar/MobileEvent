@@ -10,8 +10,74 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.Spinner
 import android.widget.TextView
+import android.widget.RadioButton
+import android.widget.RadioGroup
 
-class ReminderWidgetConfigureActivity:Activity(){
-    override fun onCreate(savedInstanceState:Bundle?){super.onCreate(savedInstanceState);setResult(RESULT_CANCELED);val id=intent?.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID,AppWidgetManager.INVALID_APPWIDGET_ID)?:AppWidgetManager.INVALID_APPWIDGET_ID;if(id==AppWidgetManager.INVALID_APPWIDGET_ID){finish();return};ReminderStore.ensureDefaults(this);val items=ReminderStore.all(this);val root=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(30,30,30,30)};root.addView(TextView(this).apply{text="Choose reminder for this widget";textSize=20f},lp());val spin=Spinner(this);spin.adapter=ArrayAdapter(this,android.R.layout.simple_spinner_dropdown_item,items.map{"${it.name} — ${it.date}"});root.addView(spin,lp());root.addView(Button(this).apply{text="Add widget";setOnClickListener{ReminderStore.setWidgetEntry(this@ReminderWidgetConfigureActivity,id,items[spin.selectedItemPosition].id);ReminderWidgetProvider.refreshAll(this@ReminderWidgetConfigureActivity);setResult(RESULT_OK,Intent().putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID,id));finish()}},lp());setContentView(root)}
-    private fun lp()=LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.WRAP_CONTENT).apply{bottomMargin=14}
+class ReminderWidgetConfigureActivity : Activity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setResult(RESULT_CANCELED)
+        val id = intent?.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, AppWidgetManager.INVALID_APPWIDGET_ID)
+            ?: AppWidgetManager.INVALID_APPWIDGET_ID
+        if (id == AppWidgetManager.INVALID_APPWIDGET_ID) { finish(); return }
+
+        ReminderStore.ensureDefaults(this)
+        val items = ReminderStore.all(this).toMutableList()
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(30, 30, 30, 30)
+        }
+        root.addView(TextView(this).apply {
+            text = "Choose reminder for this widget"
+            textSize = 20f
+        }, lp())
+
+        val spin = Spinner(this)
+        spin.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, items.map { "${it.name} — ${it.date}" })
+        root.addView(spin, lp())
+
+        root.addView(TextView(this).apply {
+            text = "Widget theme"
+            textSize = 15f
+        }, lp())
+
+        val themeGroup = RadioGroup(this).apply {
+            orientation = RadioGroup.HORIZONTAL
+        }
+        val light = RadioButton(this).apply {
+            text = "Light"
+            setId(android.R.id.button1)
+        }
+        val dark = RadioButton(this).apply {
+            text = "Dark"
+            setId(android.R.id.button2)
+        }
+        themeGroup.addView(light)
+        themeGroup.addView(dark)
+        light.isChecked = true
+        root.addView(themeGroup, lp())
+
+        root.addView(Button(this).apply {
+            text = "ADD WIDGET"
+            setOnClickListener {
+                val selected = items.getOrNull(spin.selectedItemPosition) ?: return@setOnClickListener
+                ReminderStore.setWidgetEntry(this@ReminderWidgetConfigureActivity, id, selected.id)
+                ReminderStore.setWidgetTheme(
+                    this@ReminderWidgetConfigureActivity,
+                    id,
+                    if (dark.isChecked) "dark" else "light"
+                )
+                ReminderWidgetProvider.refreshAll(this@ReminderWidgetConfigureActivity)
+                setResult(RESULT_OK, Intent().putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id))
+                finish()
+            }
+        }, lp())
+
+        setContentView(root)
+    }
+
+    private fun lp() = LinearLayout.LayoutParams(
+        ViewGroup.LayoutParams.MATCH_PARENT,
+        ViewGroup.LayoutParams.WRAP_CONTENT
+    ).apply { bottomMargin = 14 }
 }

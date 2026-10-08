@@ -49,6 +49,7 @@ class MainActivity : Activity() {
 
         root.addView(studyEvent())
         root.addView(eventBattery())
+        root.addView(remindersCard())
         root.addView(hyperosCard())
         setContentView(scroll)
         refreshUi()
@@ -230,6 +231,36 @@ Tip: keep Events allowed to run in the background and set Battery to No restrict
             textSize = 13f
             setTextColor(Color.DKGRAY)
         }, lp())
+        return card
+    }
+
+
+    private fun remindersCard(): LinearLayout {
+        ReminderStore.ensureDefaults(this)
+        val card = card("REMINDERS & HOME WIDGETS")
+        card.addView(TextView(this).apply {
+            text = "Create reminder cards with a title, date and optional note. Add a 2×2 home-screen widget for each reminder; tap the widget to edit it."
+            textSize = 13f
+            setTextColor(Color.DKGRAY)
+        }, lp())
+
+        card.addView(Button(this).apply {
+            text = "ADD NEW REMINDER"
+            setOnClickListener {
+                startActivity(Intent(this@MainActivity, ReminderEditActivity::class.java))
+            }
+        }, lp())
+
+        ReminderStore.all(this).forEach { reminder ->
+            card.addView(Button(this).apply {
+                text = "EDIT: ${reminder.name} — ${reminder.date}"
+                setOnClickListener {
+                    startActivity(Intent(this@MainActivity, ReminderEditActivity::class.java).apply {
+                        putExtra(ReminderEditActivity.EXTRA_REMINDER_ID, reminder.id)
+                    })
+                }
+            }, lp())
+        }
         return card
     }
 
