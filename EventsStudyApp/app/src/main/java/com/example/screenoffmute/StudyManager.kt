@@ -10,6 +10,7 @@ object StudyManager {
     private const val RUNTIME = "study_runtime"
     private const val PREV_MEDIA = "prev_media"
     private const val PREV_RINGER = "prev_ringer"
+    private const val SILENT_RECHECK_MS = 30 * 60 * 1000L
 
     fun activate(c: Context, source: String) {
         if (!StudyPrefs.isActive(c)) {
@@ -22,6 +23,7 @@ object StudyManager {
             StudyPrefs.setActive(c, true)
             StudyPrefs.setSource(c, source)
             StudyPrefs.setCurrentStart(c, System.currentTimeMillis())
+            StudyPrefs.setSilentCheckAt(c, System.currentTimeMillis())
         }
         // Apply the entry actions once when a new Study Mode session starts.
         // While the user remains connected, media volume is NOT forced back to zero.
@@ -48,7 +50,18 @@ object StudyManager {
     // connected to the Study Hall Wi-Fi without Events resetting it to zero.
     fun reapplySilentMode(c: Context) {
         if (!StudyPrefs.isActive(c)) return
+        if (!StudyPrefs.silent(c)) return
+
+        val now = System.currentTimeMillis()
+        val last = StudyPrefs.silentCheckAt(c)
+        if (last > 0L && now - last < SILENT_RECHECK_MS) return
+
+        // Re-check/re-apply Silent Mode only every 30 minutes while the
+        // Study Hall session remains active. This allows the user to
+        // temporarily turn Silent Mode off without Events immediately
+        // switching it back on.
         applySilentMode(c)
+        StudyPrefs.setSilentCheckAt(c, now)
     }
 
     private fun applySilentMode(c: Context) {
@@ -125,6 +138,7 @@ object StudyManager {
         StudyPrefs.setActive(c, false)
         StudyPrefs.setSource(c, "")
         StudyPrefs.setCurrentStart(c, 0L)
+        StudyPrefs.setSilentCheckAt(c, 0L)
         StudyPrefs.setWifiConnected(c, false)
 
         AutomationNotifier.post(c, "Study Mode OFF — previous sound settings restored")
