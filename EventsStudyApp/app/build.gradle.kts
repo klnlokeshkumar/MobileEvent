@@ -18,8 +18,8 @@ android {
         applicationId = "com.example.screenoffmute"
         minSdk = 26
         targetSdk = 35
-        versionCode = 24
-        versionName = "24.0"
+        versionCode = 26
+        versionName = "26.0"
     }
 }
 

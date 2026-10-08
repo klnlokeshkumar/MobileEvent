@@ -5,9 +5,9 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.media.AudioAttributes
 import android.media.AudioManager
-import android.speech.tts.TextToSpeech
-import java.util.Locale
+import android.media.MediaPlayer
 import android.media.ToneGenerator
 import android.net.ConnectivityManager
 import android.net.Network
@@ -21,9 +21,19 @@ import androidx.core.content.ContextCompat
 class AutomationService : Service() {
     private val handler = Handler(android.os.Looper.getMainLooper())
     private var lastWifi = false
+    private var wifiMismatchSince = 0L
+
+    // Wi-Fi state can briefly look unavailable while Android refreshes the
+    // active network or LinkProperties. Never end Study Mode on the first
+    // transient miss. A continuous 45-second mismatch is required before
+    // we accept that the user really left/changed networks.
+    private companion object {
+        const val WIFI_POLL_MS = 10_000L
+        const val WIFI_LOSS_GRACE_MS = 45_000L
+    }
     private var lastBatteryAlert = 0L
     private var lastBatteryState = -1
-    private var tts: TextToSpeech? = null
+    private var batteryPlayer: MediaPlayer? = null
 
     private val batteryPoll = object : Runnable {
         override fun run() {
@@ -35,7 +45,7 @@ class AutomationService : Service() {
     private val wifiPoll = object : Runnable {
         override fun run() {
             runCatching { evaluateWifi() }
-            handler.postDelayed(this, 15_000L)
+            handler.postDelayed(this, WIFI_POLL_MS)
         }
     }
 
@@ -68,8 +78,8 @@ class AutomationService : Service() {
             startForeground(2001, AutomationNotifier.notification(this, "Events automation active"))
             registerReceivers()
             registerNetwork()
+            lastWifi = StudyPrefs.wifiConnected(this)
             evaluateWifi()
-            initTts()
             handler.post(wifiPoll)
             handler.post(batteryPoll)
         }.onFailure {
@@ -105,7 +115,8 @@ class AutomationService : Service() {
         processBattery(
             i.getIntExtra(BatteryManager.EXTRA_LEVEL, -1),
             i.getIntExtra(BatteryManager.EXTRA_SCALE, 100),
-            i.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
+            i.getIntExtra(BatteryManager.EXTRA_STATUS, -1),
+            i.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0)
         )
     }
 
@@ -119,11 +130,12 @@ class AutomationService : Service() {
         processBattery(
             intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1),
             intent.getIntExtra(BatteryManager.EXTRA_SCALE, 100),
-            intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
+            intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1),
+            intent.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0)
         )
     }
 
-    private fun processBattery(level: Int, scale: Int, status: Int) {
+    private fun processBattery(level: Int, scale: Int, status: Int, plugged: Int) {
         if (!EventPrefs.isBatteryEnabled(this) || level < 0) {
             lastBatteryAlert = 0L
             lastBatteryState = -1
@@ -131,8 +143,11 @@ class AutomationService : Service() {
         }
 
         val pct = if (scale > 0) level * 100 / scale else level
+        // The high-level reminder must depend on the charger actually being
+        // connected. BATTERY_STATUS_FULL can remain after the cable is removed,
+        // so use the plugged flag as well.
         val charging = status == BatteryManager.BATTERY_STATUS_CHARGING ||
-            status == BatteryManager.BATTERY_STATUS_FULL
+            (status == BatteryManager.BATTERY_STATUS_FULL && plugged != 0)
         val high = EventPrefs.batteryHigh(this)
         val low = EventPrefs.batteryLow(this)
         val state = when {
@@ -166,32 +181,48 @@ class AutomationService : Service() {
         }
     }
 
-    private fun initTts() {
-        if (tts != null) return
-        runCatching {
-            tts = TextToSpeech(applicationContext) { status ->
-                if (status == TextToSpeech.SUCCESS) {
-                    tts?.language = Locale.US
-                    tts?.setSpeechRate(0.95f)
-                }
-            }
-        }
-    }
-
     private fun speakBattery(message: String) {
+        // Battery alerts use bundled audio rather than the phone's TTS/media
+        // stream. This keeps the reminder audible even when Study Mode has
+        // set STREAM_MUSIC to 0. The audio is routed through the alarm usage.
+        val resId = when (message) {
+            "Energised, Enough of charging" -> R.raw.battery_high
+            else -> R.raw.battery_low
+        }
         runCatching {
-            initTts()
-            val engine = tts
-            if (engine != null) {
-                engine.speak(
-                    message,
-                    TextToSpeech.QUEUE_FLUSH,
-                    null,
-                    "events_battery_${System.currentTimeMillis()}"
-                )
-            } else {
-                playAlarmFallback()
+            batteryPlayer?.let { old ->
+                runCatching { if (old.isPlaying) old.stop() }
+                runCatching { old.release() }
             }
+            val player = MediaPlayer()
+            player.setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_ALARM)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build()
+            )
+            player.setOnCompletionListener { mp ->
+                runCatching { mp.release() }
+                if (batteryPlayer === mp) batteryPlayer = null
+            }
+            player.setOnErrorListener { mp, _, _ ->
+                runCatching { mp.release() }
+                if (batteryPlayer === mp) batteryPlayer = null
+                playAlarmFallback()
+                true
+            }
+            val afd = resources.openRawResourceFd(resId)
+                ?: throw IllegalStateException("Battery reminder audio missing")
+            afd.use { descriptor ->
+                player.setDataSource(
+                    descriptor.fileDescriptor,
+                    descriptor.startOffset,
+                    descriptor.length
+                )
+            }
+            player.prepare()
+            batteryPlayer = player
+            player.start()
         }.onFailure { playAlarmFallback() }
     }
 
@@ -205,31 +236,86 @@ class AutomationService : Service() {
 
     private fun evaluateWifi() {
         if (!StudyPrefs.isAutoWifiEnabled(this)) {
-            if (lastWifi) StudyManager.wifiState(this, false)
-            lastWifi = false
+            wifiMismatchSince = 0L
+            if (StudyPrefs.isActive(this) || lastWifi || StudyPrefs.wifiConnected(this)) {
+                lastWifi = false
+                StudyManager.wifiState(this, false)
+            } else {
+                lastWifi = false
+            }
             return
         }
 
         val target = StudyPrefs.wifiFingerprint(this)
-        val current = WifiIdentity.current(this)?.fingerprint ?: ""
-        val connected = target.isNotBlank() && current == target
-
-        if (connected != lastWifi || StudyPrefs.wifiConnected(this) != connected) {
-            lastWifi = connected
-            StudyManager.wifiState(this, connected)
-            post(
-                if (connected)
-                    "Study-hall Wi-Fi connected — Study Mode active"
-                else
-                    "Study-hall Wi-Fi changed/disconnected — previous sound settings restored"
-            )
-        } else if (connected && StudyPrefs.isActive(this)) {
-            // Re-apply only Silent Mode after the user grants access.
-            // Do NOT reset media volume while the user remains in the hall.
-            StudyManager.reapplySilentMode(this)
-        } else if (!connected && StudyPrefs.isActive(this)) {
-            StudyManager.wifiState(this, false)
+        if (target.isBlank()) {
+            wifiMismatchSince = 0L
+            return
         }
+
+        val snapshot = WifiIdentity.current(this)
+
+        // Android can momentarily return no active Wi-Fi/LinkProperties during
+        // DHCP renewal, network validation, or a Wi-Fi stack refresh. Treat
+        // that as UNKNOWN, not as a real disconnect.
+        if (snapshot == null) {
+            handleWifiMismatchOrUnknown()
+            return
+        }
+
+        val matchedStable = snapshot.fingerprint == target
+        val matchedLegacy = snapshot.legacyFingerprint.isNotBlank() &&
+            snapshot.legacyFingerprint == target
+        val connected = matchedStable || matchedLegacy
+
+        if (connected) {
+            wifiMismatchSince = 0L
+
+            // Automatically migrate a v10 saved fingerprint to the newer
+            // stable identity without making the user save the Wi-Fi again.
+            if (matchedLegacy && !matchedStable) {
+                StudyPrefs.setWifiFingerprint(this, snapshot.fingerprint)
+                StudyPrefs.setWifiFingerprintDescription(this, snapshot.description)
+            }
+
+            val wasActive = StudyPrefs.isActive(this)
+            val wasConnected = StudyPrefs.wifiConnected(this) || lastWifi
+            lastWifi = true
+            StudyPrefs.setWifiConnected(this, true)
+
+            if (!wasActive || !wasConnected) {
+                // activate() now applies media/silent entry actions only when
+                // this is a genuinely new Study Mode session.
+                StudyManager.wifiState(this, true)
+                post("Study-hall Wi-Fi connected — Study Mode active")
+            } else {
+                // Re-apply only Silent Mode on its configured 30-minute check.
+                // Never reset media volume while the user remains in the hall.
+                StudyManager.reapplySilentMode(this)
+            }
+            return
+        }
+
+        handleWifiMismatchOrUnknown()
+    }
+
+    private fun handleWifiMismatchOrUnknown() {
+        val active = StudyPrefs.isActive(this) || lastWifi || StudyPrefs.wifiConnected(this)
+        if (!active) {
+            wifiMismatchSince = 0L
+            lastWifi = false
+            return
+        }
+
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (wifiMismatchSince == 0L) wifiMismatchSince = now
+
+        if (now - wifiMismatchSince < WIFI_LOSS_GRACE_MS) return
+
+        wifiMismatchSince = 0L
+        lastWifi = false
+        StudyManager.wifiState(this, false)
+        // StudyManager owns the Study Mode OFF notification so the event gets
+        // one normal dismissible end notification rather than duplicates.
     }
 
     private fun createChannel() {
@@ -265,8 +351,9 @@ class AutomationService : Service() {
     override fun onDestroy() {
         handler.removeCallbacks(wifiPoll)
         handler.removeCallbacks(batteryPoll)
-        runCatching { tts?.stop(); tts?.shutdown() }
-        tts = null
+        runCatching { batteryPlayer?.stop() }
+        runCatching { batteryPlayer?.release() }
+        batteryPlayer = null
         runCatching { unregisterReceiver(batteryReceiver) }
         runCatching {
             val cm = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager

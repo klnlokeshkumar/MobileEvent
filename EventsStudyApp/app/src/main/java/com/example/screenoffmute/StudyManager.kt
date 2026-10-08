@@ -13,6 +13,7 @@ object StudyManager {
     private const val SILENT_RECHECK_MS = 30 * 60 * 1000L
 
     fun activate(c: Context, source: String) {
+        var newSession = false
         if (!StudyPrefs.isActive(c)) {
             val audio = c.getSystemService(Context.AUDIO_SERVICE) as AudioManager
             c.getSharedPreferences(RUNTIME, Context.MODE_PRIVATE).edit()
@@ -24,10 +25,12 @@ object StudyManager {
             StudyPrefs.setSource(c, source)
             StudyPrefs.setCurrentStart(c, System.currentTimeMillis())
             StudyPrefs.setSilentCheckAt(c, System.currentTimeMillis())
+            newSession = true
         }
-        // Apply the entry actions once when a new Study Mode session starts.
-        // While the user remains connected, media volume is NOT forced back to zero.
-        applyFeatureSettings(c)
+        // Apply entry actions only for a genuinely new Study Mode session.
+        // A service restart, network callback, or UI refresh while the phone is
+        // already in the Study Hall must never reset media volume again.
+        if (newSession) applyFeatureSettings(c)
     }
 
     fun applyFeatureSettings(c: Context) {

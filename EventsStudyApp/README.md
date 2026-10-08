@@ -1,21 +1,20 @@
 # Events Study Hall Automation
 
-Version 22.0
+Version 26.0
 
-## Battery Indications
+## Battery reminder audio
+- Battery reminders now use bundled audio files instead of relying on Text-to-Speech.
+- High reminder: "Energised, Enough of charging" while the charger is actually connected and the battery is at/above the highest threshold.
+- Low reminder: "I am thirsty, Please connect the charger" while the charger is disconnected and the battery is below the lowest threshold.
+- Audio is routed with ALARM usage so it remains audible even when Study Mode has set media volume to zero.
+- The high reminder stops as soon as the charger is disconnected, including the case where Android reports a previous FULL status.
 
-- Enable or disable battery reminders from the Events app.
-- Configure a highest battery threshold (1–100%).
-- Configure a lowest battery threshold (0–99%).
-- Configure the high-level reminder interval (1–60 minutes).
-- Configure the low-level reminder interval (1–60 minutes).
-- When charging and battery is at or above the highest threshold, Events speaks:
-  "Energised, Enough of charging"
-  at the selected interval until the charger is disconnected.
-- When not charging and battery is below the lowest threshold, Events speaks:
-  "I am thirsty, Please connect the charger"
-  at the selected interval until the charger is connected.
-- No vibration is used for these battery reminders.
+## Existing behavior retained
+- Stable Study Hall Wi-Fi detection and transient-loss grace period.
+- Media volume is set to zero only when a genuinely new Study Mode session starts; it is not repeatedly reset while connected.
+- Silent Mode is rechecked every 30 minutes while Study Mode remains active.
+- BootReceiver and automatic boot startup remain enabled.
+- Events remains resilient to being swiped from Recents.
+- Battery thresholds and reminder intervals remain user-configurable.
 
-The same permanent release signing key must be used for future update APKs.
-Do not include the keystore file or passwords in source control.
+Use the same permanent release signing key for every future update. Do not commit the keystore or passwords to source control.
