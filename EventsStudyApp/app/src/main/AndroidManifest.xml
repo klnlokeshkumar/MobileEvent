@@ -17,7 +17,7 @@
             <category android:name="android.intent.category.LAUNCHER" />
         </intent>
     </queries>
-    <application android:allowBackup="true" android:label="Events" android:supportsRtl="true" android:theme="@style/AppTheme">
+    <application android:allowBackup="true" android:icon="@drawable/ic_events" android:roundIcon="@drawable/ic_events" android:label="Events" android:supportsRtl="true" android:theme="@style/AppTheme">
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

@@ -23,6 +23,8 @@ object StudyManager {
             StudyPrefs.setSource(c, source)
             StudyPrefs.setCurrentStart(c, System.currentTimeMillis())
         }
+        // Apply the entry actions once when a new Study Mode session starts.
+        // While the user remains connected, media volume is NOT forced back to zero.
         applyFeatureSettings(c)
     }
 
@@ -31,38 +33,38 @@ object StudyManager {
 
         val audio = c.getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
-        // Existing feature: media volume goes to zero.
+        // Entry action: media volume goes to zero once when Study Mode starts.
         if (StudyPrefs.mediaMute(c)) {
             runCatching {
                 audio.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
             }
         }
 
-        // Requested behavior: TRUE SILENT mode. We do not manage vibration separately.
-        if (StudyPrefs.silent(c)) {
-            val nm = c.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        applySilentMode(c)
+    }
 
-            if (!nm.isNotificationPolicyAccessGranted) {
-                AutomationNotifier.post(
-                    c,
-                    "Study Mode is active. Allow Notification Policy Access once to enable Silent Mode."
-                )
-                return
-            }
+    // Used for periodic/background checks. This deliberately does NOT touch
+    // media volume, so a user can temporarily raise media volume while still
+    // connected to the Study Hall Wi-Fi without Events resetting it to zero.
+    fun reapplySilentMode(c: Context) {
+        if (!StudyPrefs.isActive(c)) return
+        applySilentMode(c)
+    }
 
-            runCatching {
-                audio.ringerMode = AudioManager.RINGER_MODE_SILENT
-            }.onFailure {
-                AutomationNotifier.post(c, "Silent Mode could not be enabled.")
-                return@onFailure
-            }
+    private fun applySilentMode(c: Context) {
+        if (!StudyPrefs.silent(c)) return
 
-            if (audio.ringerMode != AudioManager.RINGER_MODE_SILENT) {
-                AutomationNotifier.post(
-                    c,
-                    "HyperOS did not switch to Silent Mode. Please allow Notification Policy Access."
-                )
-            }
+        val audio = c.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val nm = c.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+        if (!nm.isNotificationPolicyAccessGranted) {
+            return
+        }
+
+        runCatching {
+            audio.ringerMode = AudioManager.RINGER_MODE_SILENT
+        }.onFailure {
+            return@onFailure
         }
     }
 
@@ -115,10 +117,6 @@ object StudyManager {
                         AudioManager.RINGER_MODE_NORMAL
                     )
                 } else {
-                    AutomationNotifier.post(
-                        c,
-                        "Study Mode OFF, but Silent Mode access is missing; ringer mode could not be restored."
-                    )
                 }
             }
         }

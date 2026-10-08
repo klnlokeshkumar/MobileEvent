@@ -164,30 +164,69 @@ class MainActivity : Activity() {
             }
         }, lp())
 
-        val label = TextView(this).apply { textSize = 15f }
-        card.addView(label, lp())
-
-        val bar = SeekBar(this).apply {
-            max = 50
-            progress = EventPrefs.batteryThreshold(this@MainActivity) - 50
+        fun addSetting(
+            labelPrefix: String,
+            min: Int,
+            max: Int,
+            initial: Int,
+            onValue: (Int) -> Unit
+        ): SeekBar {
+            val label = TextView(this).apply {
+                textSize = 15f
+                setTextColor(Color.DKGRAY)
+            }
+            card.addView(label, lp())
+            val bar = SeekBar(this).apply {
+                this.max = max - min
+                this.progress = (initial.coerceIn(min, max) - min)
+            }
+            card.addView(bar, lp())
+            fun sync() {
+                val value = min + bar.progress
+                label.text = "$labelPrefix: $value${if (labelPrefix.contains("threshold", true)) "%" else " minute(s)"}"
+                onValue(value)
+            }
+            bar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) = sync()
+                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+            })
+            sync()
+            return bar
         }
-        card.addView(bar, lp())
 
-        fun sync() {
-            val pct = 50 + bar.progress
-            EventPrefs.setBatteryThreshold(this@MainActivity, pct)
-            label.text = "Alert threshold: $pct%"
+        addSetting(
+            "Highest battery threshold", 1, 100, EventPrefs.batteryHigh(this)
+        ) { value ->
+            val low = EventPrefs.batteryLow(this)
+            if (value <= low) EventPrefs.setBatteryLow(this, (value - 1).coerceAtLeast(0))
+            EventPrefs.setBatteryHigh(this, value)
         }
 
-        bar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) = sync()
-            override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
-            override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
-        })
-        sync()
+        addSetting(
+            "Lowest battery threshold", 0, 99, EventPrefs.batteryLow(this)
+        ) { value ->
+            val high = EventPrefs.batteryHigh(this)
+            if (value >= high) EventPrefs.setBatteryHigh(this, (value + 1).coerceAtMost(100))
+            EventPrefs.setBatteryLow(this, value)
+        }
+
+        addSetting(
+            "High-level alarm interval", 1, 60, EventPrefs.batteryHighInterval(this)
+        ) { EventPrefs.setBatteryHighInterval(this, it) }
+
+        addSetting(
+            "Low-level alarm interval", 1, 60, EventPrefs.batteryLowInterval(this)
+        ) { EventPrefs.setBatteryLowInterval(this, it) }
 
         card.addView(TextView(this).apply {
-            text = "At/above threshold: 2-second alarm every 2 minutes while charging until unplugged; every 5 minutes when not charging."
+            text = """Charging at/above the highest level: "Energised, Enough of charging" every selected interval until the charger is disconnected.
+
+Below the lowest level while not charging: "I am thirsty, Please connect the charger" every selected interval until the charger is connected.
+
+The two thresholds must remain separate. Battery reminders depend on charging status.
+
+Tip: keep Events allowed to run in the background and set Battery to No restrictions on HyperOS for reliable reminders."""
             textSize = 13f
             setTextColor(Color.DKGRAY)
         }, lp())
@@ -317,33 +356,95 @@ class MainActivity : Activity() {
     }
 
     private fun showStats() {
+        val today = java.util.Calendar.getInstance()
+        showStatsForDate(today.get(java.util.Calendar.YEAR), today.get(java.util.Calendar.MONTH), today.get(java.util.Calendar.DAY_OF_MONTH))
+    }
+
+    private fun showStatsForDate(year: Int, month: Int, day: Int) {
+        val calendar = java.util.Calendar.getInstance().apply {
+            set(java.util.Calendar.YEAR, year)
+            set(java.util.Calendar.MONTH, month)
+            set(java.util.Calendar.DAY_OF_MONTH, day)
+            set(java.util.Calendar.HOUR_OF_DAY, 0)
+            set(java.util.Calendar.MINUTE, 0)
+            set(java.util.Calendar.SECOND, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }
+        val dayStart = calendar.timeInMillis
+        val dayEnd = dayStart + 24L * 60L * 60L * 1000L
+        val dayLabel = java.text.SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(java.util.Date(dayStart))
+
         val array = org.json.JSONArray(StudyPrefs.statsJson(this))
+        val seen = mutableSetOf<String>()
+        val rows = mutableListOf<String>()
         var total = 0L
         var hall = 0L
-        val rows = mutableListOf<String>()
-        for (i in array.length() - 1 downTo 0) {
+
+        for (i in 0 until array.length()) {
             val obj = array.optJSONObject(i) ?: continue
             val start = obj.optLong("start")
             val end = obj.optLong("end")
-            val duration = (end - start).coerceAtLeast(0L)
+            if (start <= 0L || end <= 0L || end <= start) continue
+
+            // De-duplicate identical saved sessions. This also protects the
+            // statistics display if an older build wrote the same session twice.
+            val key = "$start|$end|${obj.optString("source")}"
+            if (!seen.add(key)) continue
+
+            // Include a session if any part of it falls on the selected date.
+            val clippedStart = maxOf(start, dayStart)
+            val clippedEnd = minOf(end, dayEnd)
+            if (clippedEnd <= clippedStart) continue
+
+            val duration = clippedEnd - clippedStart
             total += duration
             if (obj.optString("source") == "wifi") hall += duration
-            val startText = java.text.SimpleDateFormat("dd MMM, HH:mm", Locale.getDefault()).format(java.util.Date(start))
-            val endText = java.text.SimpleDateFormat("HH:mm", Locale.getDefault()).format(java.util.Date(end))
+
+            val startText = java.text.SimpleDateFormat("HH:mm", Locale.getDefault()).format(java.util.Date(clippedStart))
+            val endText = java.text.SimpleDateFormat("HH:mm", Locale.getDefault()).format(java.util.Date(clippedEnd))
             rows.add("$startText → $endText  ${fmt(duration)}  [${obj.optString("source")}]")
         }
-        if (StudyPrefs.isActive(this) && StudyPrefs.currentStart(this) > 0) {
-            val duration = System.currentTimeMillis() - StudyPrefs.currentStart(this)
-            total += duration
-            if (StudyPrefs.source(this) == "wifi") hall += duration
+
+        // Include only the portion of a currently active session that falls
+        // inside the selected date.
+        if (StudyPrefs.isActive(this) && StudyPrefs.currentStart(this) > 0L) {
+            val start = StudyPrefs.currentStart(this)
+            val end = System.currentTimeMillis()
+            val clippedStart = maxOf(start, dayStart)
+            val clippedEnd = minOf(end, dayEnd)
+            if (clippedEnd > clippedStart) {
+                val duration = clippedEnd - clippedStart
+                total += duration
+                if (StudyPrefs.source(this) == "wifi") hall += duration
+                val startText = java.text.SimpleDateFormat("HH:mm", Locale.getDefault()).format(java.util.Date(clippedStart))
+                val endText = if (clippedEnd == end) "now" else java.text.SimpleDateFormat("HH:mm", Locale.getDefault()).format(java.util.Date(clippedEnd))
+                rows.add("$startText → $endText  ${fmt(duration)}  [${StudyPrefs.source(this)} — active]")
+            }
         }
+
         val message = buildString {
             append("Total Study Mode: ${fmt(total)}")
             append("\nStudy-hall Wi-Fi time: ${fmt(hall)}")
-            append("\nCompleted sessions: ${rows.size}")
-            if (rows.isNotEmpty()) append("\n\n${rows.take(20).joinToString("\n")}")
+            append("\nSessions: ${rows.size}")
+            if (rows.isNotEmpty()) append("\n\n${rows.joinToString("\n")}")
+            else append("\n\nNo Study Mode activity recorded for this date.")
         }
-        AlertDialog.Builder(this).setTitle("Study Hall Statistics").setMessage(message).setPositiveButton("OK", null).show()
+
+        AlertDialog.Builder(this)
+            .setTitle("Study Hall Statistics — $dayLabel")
+            .setMessage(message)
+            .setNeutralButton("SELECT DATE") { _, _ ->
+                val picker = android.app.DatePickerDialog(
+                    this,
+                    { _, y, m, d -> showStatsForDate(y, m, d) },
+                    year,
+                    month,
+                    day
+                )
+                picker.show()
+            }
+            .setPositiveButton("OK", null)
+            .show()
     }
 
     private fun fmt(ms: Long): String {
