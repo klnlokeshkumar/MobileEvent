@@ -88,6 +88,15 @@ class AutomationService : Service() {
     }
 
     override fun onStartCommand(i: Intent?, flags: Int, startId: Int): Int {
+        // Re-post/update the persistent foreground-service notification whenever
+        // Android or the app asks this service to start again. This helps restore
+        // the notification after it was dismissed from the notification shade.
+        runCatching {
+            createChannel()
+            startForeground(2001, AutomationNotifier.notification(this, "Events automation active"))
+        }.onFailure {
+            android.util.Log.e("EventsAutomation", "Could not refresh foreground notification", it)
+        }
         runCatching { evaluateWifi() }
         return START_STICKY
     }
